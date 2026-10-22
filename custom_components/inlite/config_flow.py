@@ -14,6 +14,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -86,6 +87,17 @@ class InliteConfigFlow(ConfigFlow, domain=DOMAIN):
         if current_entries := self._async_current_entries():
             entry = current_entries[0]
             await self.async_set_unique_id(entry.unique_id)
+            # Every hub in the garden advertises, so a discovery of another hub
+            # must not replace an address that is still reachable.
+            current_address = entry.data.get(CONF_BLE_ADDRESS)
+            if (
+                current_address is not None
+                and current_address != discovery_info.address
+                and bluetooth.async_address_present(
+                    self.hass, current_address, connectable=True
+                )
+            ):
+                self._abort_if_unique_id_configured()
             self._abort_if_unique_id_configured(
                 updates={CONF_BLE_ADDRESS: discovery_info.address}
             )

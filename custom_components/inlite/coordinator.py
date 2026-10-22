@@ -163,8 +163,21 @@ class InliteCoordinator(DataUpdateCoordinator[dict[int, dict[int, ZoneState]]]):
         attempt so HA can select the best local adapter or ESPHome proxy. Entries
         created before address persistence fall back to local-name discovery and
         learn the address from the first matching advertisement.
+
+        A garden with several hubs exposes several "inlitebt" addresses. When
+        the configured one is no longer in range, switch to the strongest hub
+        that is, instead of retrying an address no scanner can reach.
         """
         if self._ble_address is not None:
+            if not bluetooth.async_address_present(
+                self.hass, self._ble_address, connectable=True
+            ) and (info := self._strongest_hub_advertisement()):
+                _LOGGER.debug(
+                    "Hub address %s is not in range, switching to %s (RSSI %s)",
+                    self._ble_address, info.address, info.rssi,
+                )
+                self._cache_ble_service_info(info)
+                return info
             if info := bluetooth.async_last_service_info(
                 self.hass, self._ble_address, connectable=True
             ):
@@ -184,6 +197,19 @@ class InliteCoordinator(DataUpdateCoordinator[dict[int, dict[int, ZoneState]]]):
                 self._cache_ble_service_info(info)
                 return info
         return self._ble_service_info
+
+    def _strongest_hub_advertisement(
+        self,
+    ) -> bluetooth.BluetoothServiceInfoBleak | None:
+        """Return the in-range hub advertisement with the best signal, if any."""
+        hubs = [
+            info
+            for info in bluetooth.async_discovered_service_info(
+                self.hass, connectable=True
+            )
+            if info.name and info.name.lower() == BLE_LOCAL_NAME
+        ]
+        return max(hubs, key=lambda info: info.rssi, default=None)
 
     async def _ensure_connected(self, hub: InliteHub) -> None:
         """Ensure the hub has an active BLE connection, reconnecting if needed."""

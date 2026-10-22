@@ -39,6 +39,10 @@ class TestInliteCoordinatorBluetooth:
         coordinator._ble_service_info = stale
 
         monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_address_present",
+            lambda hass, address, connectable: True,
+        )
+        monkeypatch.setattr(
             "custom_components.inlite.coordinator.bluetooth.async_last_service_info",
             lambda hass, address, connectable: current,
         )
@@ -58,11 +62,73 @@ class TestInliteCoordinatorBluetooth:
         coordinator._ble_service_info = callback_info
 
         monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_address_present",
+            lambda hass, address, connectable: False,
+        )
+        monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_discovered_service_info",
+            lambda hass, connectable: [],
+        )
+        monkeypatch.setattr(
             "custom_components.inlite.coordinator.bluetooth.async_last_service_info",
             lambda hass, address, connectable: None,
         )
 
         assert coordinator._find_ble_device() is callback_info
+
+    def test_unreachable_address_switches_to_strongest_hub(self, monkeypatch) -> None:
+        """An out-of-range configured hub is replaced by the strongest one in range."""
+        coordinator = object.__new__(InliteCoordinator)
+        update_entry = Mock()
+        coordinator.hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry)
+        )
+        coordinator.entry = SimpleNamespace(data={"ble_address": "far-hub"})
+        coordinator._ble_address = "far-hub"
+        coordinator._ble_service_info = None
+        weak = ServiceInfo("inlitebt", "weak-hub", rssi=-81)
+        strong = ServiceInfo("inlitebt", "strong-hub", rssi=-72)
+        other = ServiceInfo("Smart Smoke Alarm", "other", rssi=-40)
+
+        monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_address_present",
+            lambda hass, address, connectable: False,
+        )
+        monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_discovered_service_info",
+            lambda hass, connectable: [weak, other, strong],
+        )
+
+        assert coordinator._find_ble_device() is strong
+        assert coordinator._ble_address == "strong-hub"
+        update_entry.assert_called_once_with(
+            coordinator.entry,
+            data={"ble_address": "strong-hub"},
+        )
+
+    def test_reachable_address_is_kept_over_stronger_hub(self, monkeypatch) -> None:
+        """A configured hub that is still in range is not swapped out."""
+        coordinator = object.__new__(InliteCoordinator)
+        coordinator.hass = object()
+        coordinator._ble_address = "hub-address"
+        coordinator._ble_service_info = None
+        current = ServiceInfo("inlitebt", "hub-address", rssi=-85)
+
+        monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_address_present",
+            lambda hass, address, connectable: True,
+        )
+        monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_discovered_service_info",
+            lambda hass, connectable: pytest.fail("must not look for other hubs"),
+        )
+        monkeypatch.setattr(
+            "custom_components.inlite.coordinator.bluetooth.async_last_service_info",
+            lambda hass, address, connectable: current,
+        )
+
+        assert coordinator._find_ble_device() is current
+        assert coordinator._ble_address == "hub-address"
 
     def test_legacy_entry_learns_address_from_local_name(self, monkeypatch) -> None:
         """An entry created before address persistence learns the hub address."""

@@ -18,7 +18,7 @@ class FlowAborted(Exception):
 async def test_bluetooth_discovery_associates_existing_garden_entry() -> None:
     """Rediscovery updates the transport address through the existing entry."""
     flow = object.__new__(InliteConfigFlow)
-    entry = SimpleNamespace(unique_id="garden-id")
+    entry = SimpleNamespace(unique_id="garden-id", data={})
     unique_ids: list[str] = []
     captured_updates: dict[str, str] | None = None
 
@@ -41,3 +41,42 @@ async def test_bluetooth_discovery_associates_existing_garden_entry() -> None:
 
     assert unique_ids == ["garden-id"]
     assert captured_updates == {CONF_BLE_ADDRESS: "AA:BB"}
+
+
+@pytest.mark.parametrize(
+    ("current_present", "expected_updates"),
+    [(True, None), (False, {CONF_BLE_ADDRESS: "far-hub"})],
+)
+@pytest.mark.asyncio
+async def test_bluetooth_discovery_keeps_reachable_address(
+    monkeypatch, current_present: bool, expected_updates: dict[str, str] | None
+) -> None:
+    """Discovering another hub only replaces an address that is out of range."""
+    flow = object.__new__(InliteConfigFlow)
+    flow.hass = object()
+    entry = SimpleNamespace(
+        unique_id="garden-id", data={CONF_BLE_ADDRESS: "near-hub"}
+    )
+    captured: list[dict[str, str] | None] = []
+
+    flow._async_current_entries = lambda: [entry]
+
+    async def set_unique_id(unique_id: str) -> None:
+        return None
+
+    flow.async_set_unique_id = set_unique_id
+
+    def capture_abort(*, updates: dict[str, str] | None = None) -> None:
+        captured.append(updates)
+        raise FlowAborted
+
+    flow._abort_if_unique_id_configured = capture_abort
+    monkeypatch.setattr(
+        "custom_components.inlite.config_flow.bluetooth.async_address_present",
+        lambda hass, address, connectable: current_present,
+    )
+
+    with pytest.raises(FlowAborted):
+        await flow.async_step_bluetooth(SimpleNamespace(address="far-hub"))
+
+    assert captured == [expected_updates]
